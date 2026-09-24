@@ -1,32 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Smartphone,
-  Code2,
-  Activity,
-  Layers,
-  Download,
-  Sparkles,
-  Phone,
-  PhoneOff,
-  Mic,
-  MicOff,
-  Github,
-  CheckCircle2,
-  Radio,
-  Zap,
-  Cpu
-} from 'lucide-react';
-import { AndroidPhoneSimulator } from './components/AndroidPhoneSimulator';
-import { AudioEngineDashboard } from './components/AudioEngineDashboard';
-import { CodeProjectExplorer } from './components/CodeProjectExplorer';
-import { ArchitectureGuide } from './components/ArchitectureGuide';
 import { SupportedLanguage, TranscriptItem, HardwareTelemetry } from './types';
-import { SUPPORTED_LANGUAGES, PRESET_CALL_SCENARIOS } from './data/languages';
+import { SUPPORTED_LANGUAGES } from './data/languages';
 import { WebAudioVadEngine } from './utils/audioVAD';
-import { generateAndroidProjectZip } from './utils/zipExport';
+import { CallTranslatorApp } from './components/CallTranslatorApp';
+import { DeveloperModal } from './components/DeveloperModal';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'simulator' | 'code' | 'telemetry' | 'architecture'>('simulator');
   const [isCallActive, setIsCallActive] = useState(false);
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
 
@@ -35,6 +14,8 @@ export default function App() {
 
   const [useLiveMic, setUseLiveMic] = useState(false);
   const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
+  const [isDevSheetOpen, setIsDevSheetOpen] = useState(false);
+
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>([
     {
       id: 'init-1',
@@ -180,7 +161,7 @@ export default function App() {
     setTargetLang(temp);
   };
 
-  // Send simulated or spoken speech to Gemini API endpoint
+  // Send speech to Gemini API endpoint
   const handleSendSpeech = async (text: string, speaker: 'LOCAL_USER' | 'REMOTE_PARTY') => {
     if (!text.trim() || isProcessingSpeech) return;
     setIsProcessingSpeech(true);
@@ -278,242 +259,40 @@ export default function App() {
     }
   };
 
-  const handleDownloadAllZip = async () => {
-    const zipBlob = await generateAndroidProjectZip();
-    const url = URL.createObjectURL(zipBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'Android-VoiceCall-Translation-Kotlin.zip';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
-      {/* Top Global Navigation Bar */}
-      <header className="border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
-          {/* Logo & Product Title */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-emerald-500 flex items-center justify-center text-white shadow-lg shadow-indigo-950/50">
-              <Phone className="w-5 h-5 fill-current" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-sm tracking-tight text-white">
-                  Android Voice &amp; Call Translation Studio
-                </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                  Android 14+ (API 34)
-                </span>
-              </div>
-              <p className="text-xs text-neutral-400 hidden sm:block">
-                Ktor CIO WebSockets • 16kHz PCM AudioRecord/AudioTrack • RMS VAD ~30dB
-              </p>
-            </div>
-          </div>
-
-          {/* Navigation Tabs */}
-          <div className="flex items-center bg-neutral-950 p-1 rounded-xl border border-neutral-800">
-            <button
-              onClick={() => setActiveTab('simulator')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition ${
-                activeTab === 'simulator'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Phone Simulator</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('code')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition ${
-                activeTab === 'code'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Kotlin Codebase</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('telemetry')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition ${
-                activeTab === 'telemetry'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Activity className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Audio Engine &amp; VAD</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('architecture')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition ${
-                activeTab === 'architecture'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Architecture</span>
-            </button>
-          </div>
-
-          {/* Download Project Button */}
-          <button
-            onClick={handleDownloadAllZip}
-            className="hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-xs font-semibold text-neutral-100 transition shadow"
-          >
-            <Download className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Export Android Project (.zip)</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 flex flex-col">
-        {activeTab === 'simulator' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left: Interactive Phone Simulator */}
-            <div className="lg:col-span-5 flex justify-center">
-              <AndroidPhoneSimulator
-                isCallActive={isCallActive}
-                onStartCall={handleStartCall}
-                onStopCall={handleStopCall}
-                sourceLang={sourceLang}
-                targetLang={targetLang}
-                onSourceLangChange={setSourceLang}
-                onTargetLangChange={setTargetLang}
-                onSwapLanguages={handleSwapLanguages}
-                transcripts={transcripts}
-                onClearTranscripts={() => setTranscripts([])}
-                telemetry={telemetry}
-                useLiveMic={useLiveMic}
-                onToggleLiveMic={handleToggleLiveMic}
-                onSendSimulatedSpeech={handleSendSpeech}
-                isProcessingSpeech={isProcessingSpeech}
-                onPlayTts={handlePlayAudioTrack}
-                callDurationSeconds={callDurationSeconds}
-              />
-            </div>
-
-            {/* Right: Real-time Audio Hardware Telemetry & Quick Test Station */}
-            <div className="lg:col-span-7 flex flex-col gap-4">
-              <AudioEngineDashboard
-                telemetry={telemetry}
-                isCallActive={isCallActive}
-                callDurationSeconds={callDurationSeconds}
-              />
-
-              {/* Developer Quick-Test & Speech Simulator Console */}
-              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-amber-400" />
-                    <h3 className="text-sm font-bold text-neutral-100">
-                      Live Call Speech Generator &amp; Microphone Input
-                    </h3>
-                  </div>
-
-                  <button
-                    onClick={handleToggleLiveMic}
-                    className={`px-3 py-1 rounded-xl text-xs font-medium border flex items-center gap-1.5 transition ${
-                      useLiveMic
-                        ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/50'
-                        : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-white'
-                    }`}
-                  >
-                    {useLiveMic ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5" />}
-                    <span>{useLiveMic ? 'Live Mic Active' : 'Enable Real Mic'}</span>
-                  </button>
-                </div>
-
-                <p className="text-xs text-neutral-400 mb-4 leading-relaxed">
-                  Speak into your physical microphone with live 16kHz sampling and RMS decibel thresholding, or click any conversation scenario below to simulate caller voice frames:
-                </p>
-
-                {/* Scenario Buttons */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {PRESET_CALL_SCENARIOS.map((scenario, sIdx) => (
-                    <div
-                      key={sIdx}
-                      className="bg-neutral-950/60 p-3 rounded-xl border border-neutral-800/80 flex flex-col justify-between"
-                    >
-                      <div>
-                        <div className="text-xs font-bold text-neutral-200 mb-1">{scenario.title}</div>
-                        <div className="text-[11px] text-neutral-500 font-mono mb-2">
-                          {scenario.sourceLang} ➔ {scenario.targetLang}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col gap-1.5 mt-2">
-                        {scenario.dialogue.slice(0, 2).map((item, idx) => (
-                          <button
-                            key={idx}
-                            disabled={!isCallActive || isProcessingSpeech}
-                            onClick={() => handleSendSpeech(item.text, item.speaker)}
-                            className="text-left px-2 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/60 rounded text-[11px] text-neutral-300 truncate transition disabled:opacity-40"
-                          >
-                            <span className="font-semibold text-indigo-400 mr-1">
-                              {item.speaker === 'LOCAL_USER' ? 'You:' : 'Caller:'}
-                            </span>
-                            {item.text}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {!isCallActive && (
-                  <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300 flex items-center gap-2">
-                    <Radio className="w-4 h-4 flex-shrink-0 animate-pulse" />
-                    <span>
-                      The Call Translation Foreground Service is currently idle. Click{' '}
-                      <strong>Start Live Translation Call</strong> on the phone simulator to activate the Audio Hardware Engine!
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'code' && <CodeProjectExplorer />}
-
-        {activeTab === 'telemetry' && (
-          <AudioEngineDashboard
-            telemetry={telemetry}
-            isCallActive={isCallActive}
-            callDurationSeconds={callDurationSeconds}
-          />
-        )}
-
-        {activeTab === 'architecture' && <ArchitectureGuide />}
+    <div className="w-full min-h-[100dvh] h-[100dvh] bg-neutral-950 flex flex-col justify-center items-center overflow-hidden font-sans">
+      {/* The App Interface: Shown normally, edge-to-edge on phone or centered on tablet/desktop */}
+      <main className="w-full h-full max-w-lg md:h-[94vh] md:max-h-[840px] md:my-auto md:rounded-3xl md:border md:border-neutral-800 md:shadow-2xl overflow-hidden flex flex-col bg-neutral-950">
+        <CallTranslatorApp
+          isCallActive={isCallActive}
+          onStartCall={handleStartCall}
+          onStopCall={handleStopCall}
+          sourceLang={sourceLang}
+          targetLang={targetLang}
+          onSourceLangChange={setSourceLang}
+          onTargetLangChange={setTargetLang}
+          onSwapLanguages={handleSwapLanguages}
+          transcripts={transcripts}
+          onClearTranscripts={() => setTranscripts([])}
+          telemetry={telemetry}
+          useLiveMic={useLiveMic}
+          onToggleLiveMic={handleToggleLiveMic}
+          onSendSpeech={handleSendSpeech}
+          isProcessingSpeech={isProcessingSpeech}
+          onPlayTts={handlePlayAudioTrack}
+          callDurationSeconds={callDurationSeconds}
+          onOpenDevSheet={() => setIsDevSheetOpen(true)}
+        />
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-neutral-800/80 bg-neutral-900/40 py-4 px-6 mt-auto">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
-          <div>
-            <span>Android 14+ Low-Latency Audio Streaming Architecture • Ktor CIO WebSockets</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span>AudioRecord 16kHz MONO</span>
-            <span>•</span>
-            <span>Acoustic Echo Cancellation (AEC)</span>
-            <span>•</span>
-            <span>AudioTrack Stream Playback</span>
-          </div>
-        </div>
-      </footer>
+      {/* Developer & Code Modal: Opened discreetly via the Code icon in top bar */}
+      <DeveloperModal
+        isOpen={isDevSheetOpen}
+        onClose={() => setIsDevSheetOpen(false)}
+        telemetry={telemetry}
+        isCallActive={isCallActive}
+        callDurationSeconds={callDurationSeconds}
+      />
     </div>
   );
 }
