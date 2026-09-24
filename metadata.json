@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
-  "requestFramePermissions": [],
+  "name": "Android Real-Time Call Translation Studio",
+  "description": "Production-ready Android 14+ Kotlin Voice & Call Translation Architecture with Ktor WebSockets, AudioRecord/AudioTrack engine, RMS VAD, and Jetpack Compose.",
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
