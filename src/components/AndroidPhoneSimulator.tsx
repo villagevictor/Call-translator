@@ -472,7 +472,7 @@ export const AndroidPhoneSimulator: React.FC<AndroidPhoneSimulatorProps> = ({
                 </div>
 
                 <div className="flex gap-1 overflow-x-auto pb-0.5 no-scrollbar">
-                  {PRESET_CALL_SCENARIOS[selectedScenarioIndex].dialogue.map((item, idx) => (
+                  {PRESET_CALL_SCENARIOS[selectedScenarioIndex]?.dialogue.map((item: { text: string; speaker: 'LOCAL_USER' | 'REMOTE_PARTY' }, idx: number) => (
                     <button
                       key={idx}
                       disabled={isProcessingSpeech}

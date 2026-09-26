@@ -1,41 +1,32 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { SupportedLanguage, TranscriptItem, HardwareTelemetry } from './types';
-import { SUPPORTED_LANGUAGES } from './data/languages';
+import { SupportedLanguage, TranscriptItem, HardwareTelemetry, CallState, CallMode } from './types';
+import { SUPPORTED_LANGUAGES, CALL_CONTACTS, CallContact } from './data/languages';
 import { WebAudioVadEngine } from './utils/audioVAD';
 import { CallTranslatorApp } from './components/CallTranslatorApp';
 import { DeveloperModal } from './components/DeveloperModal';
+import { callSoundEngine } from './utils/callSounds';
 
 export default function App() {
-  const [isCallActive, setIsCallActive] = useState(false);
+  const [callState, setCallState] = useState<CallState>('IDLE');
+  const [callMode, setCallMode] = useState<CallMode>('AI_PARTNER');
+  const [activeContact, setActiveContact] = useState<CallContact | null>(null);
+  const [customPhoneNumber, setCustomPhoneNumber] = useState('');
   const [callDurationSeconds, setCallDurationSeconds] = useState(0);
 
   const [sourceLang, setSourceLang] = useState<SupportedLanguage>(SUPPORTED_LANGUAGES[0]); // English (US)
-  const [targetLang, setTargetLang] = useState<SupportedLanguage>(SUPPORTED_LANGUAGES[1]); // Spanish (Spain)
+  const [targetLang, setTargetLang] = useState<SupportedLanguage>(SUPPORTED_LANGUAGES[4]); // Spanish (Spain)
 
-  const [useLiveMic, setUseLiveMic] = useState(false);
+  const [useLiveMic, setUseLiveMic] = useState(true);
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const [autoSpeakTranslation, setAutoSpeakTranslation] = useState(true);
+  const [vadThreshold, setVadThreshold] = useState(28);
+
   const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
+  const [activeSpeakerLabel, setActiveSpeakerLabel] = useState<string | null>(null);
   const [isDevSheetOpen, setIsDevSheetOpen] = useState(false);
 
-  const [transcripts, setTranscripts] = useState<TranscriptItem[]>([
-    {
-      id: 'init-1',
-      speaker: 'LOCAL_USER',
-      originalText: 'Hello! I am testing the real-time call translation service.',
-      translatedText: '¡Hola! Estoy probando el servicio de traducción de llamadas en tiempo real.',
-      sourceLang: 'en-US',
-      targetLang: 'es-ES',
-      timestamp: Date.now() - 35000,
-    },
-    {
-      id: 'init-2',
-      speaker: 'REMOTE_PARTY',
-      originalText: 'Perfecto, la calidad del audio es excelente y no hay retraso.',
-      translatedText: 'Perfect, the audio quality is excellent and there is no delay.',
-      sourceLang: 'es-ES',
-      targetLang: 'en-US',
-      timestamp: Date.now() - 20000,
-    },
-  ]);
+  const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
 
   const [telemetry, setTelemetry] = useState<HardwareTelemetry>({
     sampleRate: 16000,
@@ -44,29 +35,30 @@ export default function App() {
     frameSizeBytes: 3200,
     frameIntervalMs: 100,
     currentDecibels: 0,
-    vadThresholdDb: 30,
+    vadThresholdDb: 28,
     isVoiceActive: false,
-    totalFramesCaptured: 128,
-    framesSent: 42,
-    framesGatedSilence: 86,
-    currentLatencyMs: 38,
+    totalFramesCaptured: 0,
+    framesSent: 0,
+    framesGatedSilence: 0,
+    currentLatencyMs: 34,
     wsConnected: false,
     reconnectAttempts: 0,
-    audioTrackBufferFillPercent: 45,
+    audioTrackBufferFillPercent: 42,
   });
 
   const vadEngineRef = useRef<WebAudioVadEngine | null>(null);
   const callTimerRef = useRef<number | null>(null);
+  const connectingTimeoutRef = useRef<number | null>(null);
 
-  // Call duration timer
+  // Call duration counter
   useEffect(() => {
-    if (isCallActive) {
+    if (callState === 'IN_CALL') {
       callTimerRef.current = window.setInterval(() => {
         setCallDurationSeconds((prev) => prev + 1);
         setTelemetry((prev) => ({
           ...prev,
           totalFramesCaptured: prev.totalFramesCaptured + 1,
-          currentLatencyMs: Math.floor(35 + Math.random() * 12),
+          currentLatencyMs: Math.floor(32 + Math.random() * 10),
         }));
       }, 1000);
     } else {
@@ -74,66 +66,141 @@ export default function App() {
         clearInterval(callTimerRef.current);
         callTimerRef.current = null;
       }
-      setCallDurationSeconds(0);
     }
 
     return () => {
       if (callTimerRef.current) clearInterval(callTimerRef.current);
     };
-  }, [isCallActive]);
+  }, [callState]);
 
   // Handle live microphone VAD callbacks
-  const handleAudioLevel = useCallback((decibels: number, isVoiceActive: boolean) => {
-    setTelemetry((prev) => ({
-      ...prev,
-      currentDecibels: decibels,
-      isVoiceActive,
-      totalFramesCaptured: prev.totalFramesCaptured + 1,
-      framesSent: isVoiceActive ? prev.framesSent + 1 : prev.framesSent,
-      framesGatedSilence: !isVoiceActive ? prev.framesGatedSilence + 1 : prev.framesGatedSilence,
-    }));
-  }, []);
+  const handleAudioLevel = useCallback(
+    (decibels: number, isVoiceActive: boolean) => {
+      if (isMicMuted) {
+        setTelemetry((prev) => ({
+          ...prev,
+          currentDecibels: 0,
+          isVoiceActive: false,
+        }));
+        return;
+      }
+
+      setTelemetry((prev) => ({
+        ...prev,
+        currentDecibels: decibels,
+        isVoiceActive,
+        totalFramesCaptured: prev.totalFramesCaptured + 1,
+        framesSent: isVoiceActive ? prev.framesSent + 1 : prev.framesSent,
+        framesGatedSilence: !isVoiceActive ? prev.framesGatedSilence + 1 : prev.framesGatedSilence,
+      }));
+    },
+    [isMicMuted]
+  );
 
   const handlePcmChunkReady = useCallback(
     async (pcm16: Int16Array, base64Pcm: string) => {
-      // Periodic speech trigger if voice is sustained
-      console.log('VAD active PCM chunk captured (3200 bytes)');
+      // Audio chunk captured for WebSocket pipeline
     },
     []
   );
 
+  // Speech recognized via Web Speech API in real-time
+  const handleSpeechRecognized = useCallback(
+    async (transcript: string, isFinal: boolean) => {
+      if (callState !== 'IN_CALL' || isMicMuted || !transcript.trim()) return;
+
+      if (isFinal) {
+        handleSendSpeech(transcript.trim(), 'LOCAL_USER');
+      } else {
+        setActiveSpeakerLabel(`You: "${transcript.trim()}"`);
+      }
+    },
+    [callState, isMicMuted]
+  );
+
   // Initialize Web Audio VAD
   useEffect(() => {
-    vadEngineRef.current = new WebAudioVadEngine({
-      onAudioLevel: handleAudioLevel,
-      onPcmChunkReady: handlePcmChunkReady,
-      onError: (err) => console.warn('VAD Audio Warning:', err),
-    });
+    vadEngineRef.current = new WebAudioVadEngine(
+      {
+        onAudioLevel: handleAudioLevel,
+        onPcmChunkReady: handlePcmChunkReady,
+        onSpeechRecognized: handleSpeechRecognized,
+        onError: (err) => console.warn('VAD Audio Warning:', err),
+      },
+      vadThreshold
+    );
 
     return () => {
       vadEngineRef.current?.stop();
     };
-  }, [handleAudioLevel, handlePcmChunkReady]);
+  }, [handleAudioLevel, handlePcmChunkReady, handleSpeechRecognized, vadThreshold]);
 
-  // Start Call
-  const handleStartCall = async () => {
-    setIsCallActive(true);
+  // Adjust threshold on change
+  useEffect(() => {
+    vadEngineRef.current?.setThreshold(vadThreshold);
+  }, [vadThreshold]);
+
+  // Start Call Flow
+  const handleStartCall = (contact?: CallContact, customNum?: string) => {
+    const targetContact = contact || (customNum ? null : CALL_CONTACTS[0]);
+    setActiveContact(targetContact || null);
+    if (customNum) setCustomPhoneNumber(customNum);
+
+    // If calling a specific contact, configure target language to match their native tongue
+    if (targetContact) {
+      const matchLang = SUPPORTED_LANGUAGES.find((l) => l.code === targetContact.langCode);
+      if (matchLang) {
+        setTargetLang(matchLang);
+      }
+    }
+
+    setCallState('RINGING');
+    setCallDurationSeconds(0);
+    callSoundEngine.playOutgoingRing();
+
     setTelemetry((prev) => ({
       ...prev,
       wsConnected: true,
-      currentDecibels: 24,
-      isVoiceActive: false,
+      currentLatencyMs: 38,
     }));
 
-    if (useLiveMic && vadEngineRef.current) {
-      await vadEngineRef.current.start();
-    }
+    // Connect after 2.2 seconds of ringing
+    connectingTimeoutRef.current = window.setTimeout(async () => {
+      callSoundEngine.playConnectChime();
+      setCallState('IN_CALL');
+
+      // Start mic if enabled
+      if (useLiveMic && !isMicMuted && vadEngineRef.current) {
+        await vadEngineRef.current.start(sourceLang.code);
+      }
+
+      // If calling an AI partner, they speak their native greeting
+      if (targetContact) {
+        setTimeout(() => {
+          handleIncomingPartnerSpeech(
+            targetContact.greetingInNative,
+            targetContact.greetingTranslated,
+            targetContact.langCode,
+            sourceLang.code,
+            targetContact.name
+          );
+        }, 800);
+      }
+    }, 2200);
   };
 
-  // Stop Call
-  const handleStopCall = () => {
-    setIsCallActive(false);
+  // End Call
+  const handleEndCall = () => {
+    if (connectingTimeoutRef.current) {
+      clearTimeout(connectingTimeoutRef.current);
+      connectingTimeoutRef.current = null;
+    }
+    callSoundEngine.playEndCallChime();
+    setCallState('IDLE');
+    setActiveSpeakerLabel(null);
+    setIsProcessingSpeech(false);
     vadEngineRef.current?.stop();
+
     setTelemetry((prev) => ({
       ...prev,
       wsConnected: false,
@@ -146,12 +213,22 @@ export default function App() {
     const nextState = !useLiveMic;
     setUseLiveMic(nextState);
 
-    if (isCallActive) {
-      if (nextState) {
-        await vadEngineRef.current?.start();
+    if (callState === 'IN_CALL') {
+      if (nextState && !isMicMuted) {
+        await vadEngineRef.current?.start(sourceLang.code);
       } else {
         vadEngineRef.current?.stop();
       }
+    }
+  };
+
+  const handleToggleMicMute = () => {
+    const nextMute = !isMicMuted;
+    setIsMicMuted(nextMute);
+    if (nextMute) {
+      vadEngineRef.current?.stop();
+    } else if (callState === 'IN_CALL' && useLiveMic) {
+      vadEngineRef.current?.start(sourceLang.code);
     }
   };
 
@@ -159,24 +236,69 @@ export default function App() {
     const temp = sourceLang;
     setSourceLang(targetLang);
     setTargetLang(temp);
+    vadEngineRef.current?.setLanguage(targetLang.code);
   };
 
-  // Send speech to Gemini API endpoint
+  // Play audio track
+  const handlePlayAudioTrack = (text: string, langCode: string, audioUrl?: string | null) => {
+    if (!isSpeakerOn) return;
+
+    if (audioUrl) {
+      const audio = new Audio(audioUrl);
+      audio.play().catch((e) => console.warn('Audio play error:', e));
+      return;
+    }
+
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = langCode;
+      utterance.rate = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  // Receive speech from the remote partner in the call
+  const handleIncomingPartnerSpeech = (
+    nativeText: string,
+    translatedText: string,
+    remoteLang: string,
+    userLang: string,
+    partnerName: string
+  ) => {
+    setActiveSpeakerLabel(`${partnerName} speaking (${remoteLang.split('-')[0]})...`);
+
+    const newItem: TranscriptItem = {
+      id: `partner-${Date.now()}`,
+      speaker: 'REMOTE_PARTY',
+      originalText: nativeText,
+      translatedText: translatedText,
+      sourceLang: remoteLang,
+      targetLang: userLang,
+      timestamp: Date.now(),
+      latencyMs: 38,
+    };
+
+    setTranscripts((prev) => [...prev, newItem]);
+
+    // Play translation to user
+    if (autoSpeakTranslation) {
+      handlePlayAudioTrack(translatedText, userLang);
+    }
+
+    setTimeout(() => {
+      setActiveSpeakerLabel(null);
+    }, 1500);
+  };
+
+  // User speaks in the call -> Translate & Send -> Call partner replies naturally!
   const handleSendSpeech = async (text: string, speaker: 'LOCAL_USER' | 'REMOTE_PARTY') => {
     if (!text.trim() || isProcessingSpeech) return;
     setIsProcessingSpeech(true);
+    setActiveSpeakerLabel(speaker === 'LOCAL_USER' ? 'Translating your speech...' : 'Translating remote speech...');
 
     const sLang = speaker === 'LOCAL_USER' ? sourceLang.code : targetLang.code;
     const tLang = speaker === 'LOCAL_USER' ? targetLang.code : sourceLang.code;
-
-    // Simulate audio frame transmission telemetry bump
-    setTelemetry((prev) => ({
-      ...prev,
-      totalFramesCaptured: prev.totalFramesCaptured + 10,
-      framesSent: prev.framesSent + 10,
-      isVoiceActive: true,
-      currentDecibels: 58 + Math.floor(Math.random() * 20),
-    }));
 
     try {
       const response = await fetch('/api/translate-speech', {
@@ -209,64 +331,81 @@ export default function App() {
 
       setTranscripts((prev) => [...prev, newItem]);
 
-      // Play audio automatically if returned or synthesize
-      if (newItem.audioUrl) {
+      // Speak translated speech over the call
+      if (autoSpeakTranslation) {
         handlePlayAudioTrack(newItem.translatedText, tLang, newItem.audioUrl);
-      } else {
-        handlePlayAudioTrack(newItem.translatedText, tLang);
+      }
+
+      // If user spoke during an active call with an AI partner, have the partner reply in their native tongue
+      if (callState === 'IN_CALL' && speaker === 'LOCAL_USER' && activeContact) {
+        setTimeout(async () => {
+          try {
+            setActiveSpeakerLabel(`${activeContact.name} is speaking (${activeContact.languageName.split(' ')[0]})...`);
+
+            const partnerRes = await fetch('/api/call-partner-reply', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contactName: activeContact.name,
+                contactRole: activeContact.role,
+                contactLang: targetLang.code,
+                userLang: sourceLang.code,
+                conversationHistory: transcripts.slice(-4),
+                lastUserMessage: newItem.translatedText,
+              }),
+            });
+
+            if (partnerRes.ok) {
+              const partnerData = await partnerRes.json();
+              handleIncomingPartnerSpeech(
+                partnerData.partnerNativeText,
+                partnerData.translatedToUserText,
+                targetLang.code,
+                sourceLang.code,
+                activeContact.name
+              );
+            }
+          } catch (pErr) {
+            console.warn('Partner reply fallback:', pErr);
+          }
+        }, 1200);
       }
     } catch (err: any) {
       console.warn('Backend translation fallback:', err);
-      // Fallback local translation if server is offline
-      const fallbackTranslation = `[${tLang.split('-')[0].toUpperCase()}] ${text}`;
       const fallbackItem: TranscriptItem = {
         id: `msg-${Date.now()}`,
         speaker,
         originalText: text,
-        translatedText: fallbackTranslation,
+        translatedText: `[${tLang.split('-')[0].toUpperCase()}] ${text}`,
         sourceLang: sLang,
         targetLang: tLang,
         timestamp: Date.now(),
       };
       setTranscripts((prev) => [...prev, fallbackItem]);
-      handlePlayAudioTrack(fallbackItem.translatedText, tLang);
+      if (autoSpeakTranslation) {
+        handlePlayAudioTrack(fallbackItem.translatedText, tLang);
+      }
     } finally {
       setIsProcessingSpeech(false);
       setTimeout(() => {
-        setTelemetry((prev) => ({
-          ...prev,
-          isVoiceActive: false,
-          currentDecibels: 22,
-        }));
+        setActiveSpeakerLabel(null);
       }, 1000);
-    }
-  };
-
-  // Playback speech using AudioTrack simulation
-  const handlePlayAudioTrack = (text: string, langCode: string, audioUrl?: string | null) => {
-    if (audioUrl) {
-      const audio = new Audio(audioUrl);
-      audio.play().catch((e) => console.warn('Audio play error:', e));
-      return;
-    }
-
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = langCode;
-      utterance.rate = 1.0;
-      window.speechSynthesis.speak(utterance);
     }
   };
 
   return (
     <div className="w-full min-h-[100dvh] h-[100dvh] bg-neutral-950 flex flex-col justify-center items-center overflow-hidden font-sans">
-      {/* The App Interface: Shown normally, edge-to-edge on phone or centered on tablet/desktop */}
+      {/* The Native Phone Call Interface */}
       <main className="w-full h-full max-w-lg md:h-[94vh] md:max-h-[840px] md:my-auto md:rounded-3xl md:border md:border-neutral-800 md:shadow-2xl overflow-hidden flex flex-col bg-neutral-950">
         <CallTranslatorApp
-          isCallActive={isCallActive}
+          callState={callState}
+          callMode={callMode}
+          onCallModeChange={setCallMode}
           onStartCall={handleStartCall}
-          onStopCall={handleStopCall}
+          onEndCall={handleEndCall}
+          activeContact={activeContact}
+          customPhoneNumber={customPhoneNumber}
+          onCustomPhoneNumberChange={setCustomPhoneNumber}
           sourceLang={sourceLang}
           targetLang={targetLang}
           onSourceLangChange={setSourceLang}
@@ -277,20 +416,29 @@ export default function App() {
           telemetry={telemetry}
           useLiveMic={useLiveMic}
           onToggleLiveMic={handleToggleLiveMic}
+          isMicMuted={isMicMuted}
+          onToggleMicMute={handleToggleMicMute}
+          isSpeakerOn={isSpeakerOn}
+          onToggleSpeaker={() => setIsSpeakerOn(!isSpeakerOn)}
+          autoSpeakTranslation={autoSpeakTranslation}
+          onToggleAutoSpeak={() => setAutoSpeakTranslation(!autoSpeakTranslation)}
           onSendSpeech={handleSendSpeech}
           isProcessingSpeech={isProcessingSpeech}
           onPlayTts={handlePlayAudioTrack}
           callDurationSeconds={callDurationSeconds}
           onOpenDevSheet={() => setIsDevSheetOpen(true)}
+          vadThreshold={vadThreshold}
+          onVadThresholdChange={setVadThreshold}
+          activeSpeakerLabel={activeSpeakerLabel}
         />
       </main>
 
-      {/* Developer & Code Modal: Opened discreetly via the Code icon in top bar */}
+      {/* Developer & Android 14 Project Modal */}
       <DeveloperModal
         isOpen={isDevSheetOpen}
         onClose={() => setIsDevSheetOpen(false)}
         telemetry={telemetry}
-        isCallActive={isCallActive}
+        isCallActive={callState === 'IN_CALL'}
         callDurationSeconds={callDurationSeconds}
       />
     </div>

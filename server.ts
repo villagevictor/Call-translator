@@ -48,16 +48,31 @@ app.post('/api/translate-speech', async (req, res) => {
     }
 
     if (!aiClient) {
-      // Mock fallback if API key is not present in local test
-      const mockTranslations: Record<string, string> = {
-        'Hello, can you hear me?': 'Hola, ¿puedes escucharme?',
-        'I am calling regarding the contract update.': 'Llamo con respecto a la actualización del contrato.',
-        'The delivery is scheduled for tomorrow at 2 PM.': 'La entrega está programada para mañana a las 2 PM.',
+      // High-quality bilingual fallback for popular demo phrases
+      const mockDictionary: Record<string, Record<string, string>> = {
+        'Hello! Can you hear me?': {
+          'es-ES': '¡Hola! ¿Puedes escucharme claramente?',
+          'fr-FR': 'Bonjour! Est-ce que vous m’entendez bien?',
+          'am-ET': 'ሰላም! በደንብ ይሰማዎታል?',
+          'de-DE': 'Hallo! Können Sie mich deutlich hören?',
+          'ar-SA': 'مرحباً! هل تسمعني بوضوح؟',
+          'ja-JP': 'もしもし、私の声がはっきりと聞こえますか？',
+        },
+        'Yes, I can hear you clearly.': {
+          'en-US': 'Yes, I can hear you clearly.',
+          'es-ES': 'Sí, puedo escucharte perfectamente.',
+          'am-ET': 'አዎ፣ በደንብ ይሰማኛል።',
+          'fr-FR': 'Oui, je vous entends parfaitement.',
+        }
       };
-      const translated = mockTranslations[text] || `[${targetLang}] ${text || 'Spoken speech translated'}`;
+
+      const translated =
+        mockDictionary[text]?.[targetLang] ||
+        `[Translated to ${targetLang}]: ${text}`;
+
       return res.json({
         speaker,
-        originalText: text || 'Voice message detected',
+        originalText: text,
         translatedText: translated,
         sourceLang,
         targetLang,
@@ -70,21 +85,25 @@ app.post('/api/translate-speech', async (req, res) => {
 
     // If audio is provided, transcribe it first
     if (audioBase64) {
-      const transcribeResponse = await aiClient.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            inlineData: {
-              mimeType: 'audio/webm;codecs=opus',
-              data: audioBase64,
+      try {
+        const transcribeResponse = await aiClient.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: [
+            {
+              inlineData: {
+                mimeType: 'audio/webm;codecs=opus',
+                data: audioBase64,
+              },
             },
-          },
-          {
-            text: `Transcribe the spoken speech in this audio accurately. The speaker is speaking in ${sourceLang}. Return ONLY the transcribed text without commentary.`,
-          },
-        ],
-      });
-      recognizedText = transcribeResponse.text?.trim() || text || '';
+            {
+              text: `Transcribe the spoken speech in this audio accurately. The speaker is speaking in ${sourceLang}. Return ONLY the transcribed text without commentary.`,
+            },
+          ],
+        });
+        recognizedText = transcribeResponse.text?.trim() || text || '';
+      } catch (trErr) {
+        console.warn('Transcription fallback:', trErr);
+      }
     }
 
     if (!recognizedText) {
@@ -94,17 +113,23 @@ app.post('/api/translate-speech', async (req, res) => {
     // Translate text with low-latency prompt
     const translateResponse = await aiClient.models.generateContent({
       model: 'gemini-3.8-flash',
-      contents: `You are an ultra-low-latency real-time voice call interpreter. Translate the following speech from ${sourceLang} into ${targetLang}. 
-Maintain conversational spoken tone, preserve numbers/names, and output ONLY the translated text without notes or quotes.
+      contents: `You are an ultra-low-latency real-time phone call interpreter.
+Translate the following spoken phone statement from ${sourceLang} into ${targetLang}.
+Guidelines:
+- Maintain natural, conversational spoken language.
+- Preserve proper names, company names, currency, and times accurately.
+- For Ethiopian languages (Amharic am-ET, Tigrinya ti-ET, Oromo om-ET), use native script and polite phone etiquette.
+- Return ONLY the exact translated sentence without quotes, notes, or explanations.
+
 Input: "${recognizedText}"`,
       config: {
-        temperature: 0.2,
+        temperature: 0.1,
       },
     });
 
     const translatedText = translateResponse.text?.trim() || recognizedText;
 
-    // Synthesize TTS audio for playback if possible
+    // Optional TTS audio generation if supported
     let ttsAudioBase64: string | null = null;
     try {
       const voiceMap: Record<string, string> = {
@@ -125,7 +150,7 @@ Input: "${recognizedText}"`,
               {
                 text: translatedText,
                 speechMetadata: {
-                  style: 'Natural conversational phone call voice',
+                  style: 'Conversational phone call speaker',
                 },
               },
             ],
@@ -143,7 +168,7 @@ Input: "${recognizedText}"`,
 
       ttsAudioBase64 = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || null;
     } catch (ttsErr) {
-      console.warn('TTS generation fallback to browser speech synthesis:', ttsErr);
+      // Fallback to client-side speech synthesis
     }
 
     res.json({
@@ -158,6 +183,68 @@ Input: "${recognizedText}"`,
   } catch (error: any) {
     console.error('Translation error:', error);
     res.status(500).json({ error: error.message || 'Translation failed' });
+  }
+});
+
+// Partner Reply Endpoint: For simulated live telephone conversations
+app.post('/api/call-partner-reply', async (req, res) => {
+  try {
+    const {
+      contactName,
+      contactRole,
+      contactLang,
+      userLang,
+      conversationHistory,
+      lastUserMessage,
+    } = req.body;
+
+    if (!aiClient) {
+      return res.json({
+        partnerNativeText: `Entendido. Gracias por la información, seguimos en contacto.`,
+        translatedToUserText: `Understood. Thank you for the information, let us stay in touch.`,
+      });
+    }
+
+    const historyFormatted = (conversationHistory || [])
+      .map((item: any) => `${item.speaker === 'LOCAL_USER' ? 'Caller' : contactName}: "${item.originalText}"`)
+      .join('\n');
+
+    const prompt = `You are playing the role of ${contactName} (${contactRole}) on a live telephone call.
+Your native language is ${contactLang}.
+The caller speaks ${userLang} and is using a real-time call translation device.
+
+Caller just said: "${lastUserMessage}"
+
+Recent Call Context:
+${historyFormatted}
+
+Task:
+1. Respond naturally as ${contactName} in 1-2 spoken phone sentences in ${contactLang}. Be polite, professional, and directly address what they said.
+2. Provide an accurate translation of your response into ${userLang}.
+
+Format your output EXACTLY as JSON:
+{
+  "partnerNativeText": "Your spoken reply in ${contactLang}",
+  "translatedToUserText": "The translation in ${userLang}"
+}`;
+
+    const response = await aiClient.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.3,
+      },
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    res.json({
+      partnerNativeText: parsed.partnerNativeText || 'Hola, todo comprendido.',
+      translatedToUserText: parsed.translatedToUserText || 'Hello, all understood.',
+    });
+  } catch (err: any) {
+    console.error('Call partner reply error:', err);
+    res.status(500).json({ error: err.message || 'Call partner reply failed' });
   }
 });
 

@@ -1,5 +1,8 @@
 export type SpeakerRole = 'LOCAL_USER' | 'REMOTE_PARTY' | 'SYSTEM';
 
+export type CallState = 'IDLE' | 'DIALING' | 'RINGING' | 'IN_CALL' | 'ENDED';
+export type CallMode = 'AI_PARTNER' | 'DUAL_SPEAKER';
+
 export interface SupportedLanguage {
   code: string;
   name: string;
@@ -16,6 +19,7 @@ export interface TranscriptItem {
   targetLang: string;
   timestamp: number;
   audioUrl?: string | null;
+  latencyMs?: number;
 }
 
 export interface HardwareTelemetry {

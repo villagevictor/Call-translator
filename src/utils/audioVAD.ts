@@ -1,6 +1,7 @@
 export interface VadEngineCallbacks {
   onAudioLevel: (decibels: number, isVoiceActive: boolean) => void;
   onPcmChunkReady: (chunk: Int16Array, base64Pcm: string) => void;
+  onSpeechRecognized?: (transcript: string, isFinal: boolean) => void;
   onError: (err: string) => void;
 }
 
@@ -9,21 +10,34 @@ export class WebAudioVadEngine {
   private mediaStream: MediaStream | null = null;
   private processorNode: ScriptProcessorNode | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private muteGainNode: GainNode | null = null;
   private isRunning: boolean = false;
-  private vadThresholdDb: number = 30.0;
+  private vadThresholdDb: number = 28.0;
   private callbacks: VadEngineCallbacks;
+  private speechRecognition: any = null;
+  private isRecognitionActive: boolean = false;
+  private currentLanguage: string = 'en-US';
 
-  // 16000Hz * 0.1s = 1600 samples = 3200 bytes
-  private frameSizeSamples: number = 1600;
-
-  constructor(callbacks: VadEngineCallbacks, thresholdDb: number = 30.0) {
+  constructor(callbacks: VadEngineCallbacks, thresholdDb: number = 28.0) {
     this.callbacks = callbacks;
     this.vadThresholdDb = thresholdDb;
   }
 
-  async start(): Promise<boolean> {
+  setLanguage(langCode: string) {
+    this.currentLanguage = langCode;
+    if (this.speechRecognition && this.isRecognitionActive) {
+      try {
+        this.speechRecognition.lang = langCode;
+      } catch (e) {
+        console.warn('Could not update recognition lang on the fly', e);
+      }
+    }
+  }
+
+  async start(langCode?: string): Promise<boolean> {
     try {
       this.stop();
+      if (langCode) this.currentLanguage = langCode;
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -45,7 +59,7 @@ export class WebAudioVadEngine {
 
       this.sourceNode = this.audioContext.createMediaStreamSource(stream);
 
-      // Buffer size 2048 is standard for script processor
+      // Buffer size 2048
       this.processorNode = this.audioContext.createScriptProcessor(2048, 1, 1);
 
       this.processorNode.onaudioprocess = (event: AudioProcessingEvent) => {
@@ -75,7 +89,6 @@ export class WebAudioVadEngine {
         this.callbacks.onAudioLevel(decibels, isVoiceActive);
 
         if (isVoiceActive) {
-          // Convert to base64
           const buffer = pcm16.buffer;
           const bytes = new Uint8Array(buffer);
           let binary = '';
@@ -88,10 +101,19 @@ export class WebAudioVadEngine {
         }
       };
 
+      // Create a zero-gain node so local mic audio does not echo back into headphones/speaker
+      this.muteGainNode = this.audioContext.createGain();
+      this.muteGainNode.gain.value = 0.0;
+
       this.sourceNode.connect(this.processorNode);
-      this.processorNode.connect(this.audioContext.destination);
+      this.processorNode.connect(this.muteGainNode);
+      this.muteGainNode.connect(this.audioContext.destination);
 
       this.isRunning = true;
+
+      // Start Web Speech Recognition if available in browser
+      this.startSpeechRecognition();
+
       return true;
     } catch (err: any) {
       console.error('Audio VAD error:', err);
@@ -100,12 +122,84 @@ export class WebAudioVadEngine {
     }
   }
 
+  private startSpeechRecognition() {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      console.log('Web Speech Recognition not supported in this browser environment');
+      return;
+    }
+
+    try {
+      this.speechRecognition = new SpeechRecognition();
+      this.speechRecognition.continuous = true;
+      this.speechRecognition.interimResults = true;
+      this.speechRecognition.lang = this.currentLanguage;
+
+      this.speechRecognition.onresult = (event: any) => {
+        if (!this.isRunning) return;
+        let interimText = '';
+        let finalText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            finalText += res[0].transcript;
+          } else {
+            interimText += res[0].transcript;
+          }
+        }
+
+        if (finalText.trim() && this.callbacks.onSpeechRecognized) {
+          this.callbacks.onSpeechRecognized(finalText.trim(), true);
+        } else if (interimText.trim() && this.callbacks.onSpeechRecognized) {
+          this.callbacks.onSpeechRecognized(interimText.trim(), false);
+        }
+      };
+
+      this.speechRecognition.onerror = (e: any) => {
+        // Silently recover if user stops speaking or transient network error
+        if (e.error !== 'no-speech' && e.error !== 'aborted') {
+          console.warn('SpeechRecognition warning:', e.error);
+        }
+      };
+
+      this.speechRecognition.onend = () => {
+        // Auto-restart recognition if call is still active
+        if (this.isRunning && this.isRecognitionActive) {
+          try {
+            this.speechRecognition.start();
+          } catch (_) {}
+        }
+      };
+
+      this.speechRecognition.start();
+      this.isRecognitionActive = true;
+    } catch (e) {
+      console.warn('SpeechRecognition initialization error:', e);
+    }
+  }
+
   stop() {
     this.isRunning = false;
+    this.isRecognitionActive = false;
+
+    if (this.speechRecognition) {
+      try {
+        this.speechRecognition.stop();
+      } catch (_) {}
+      this.speechRecognition = null;
+    }
 
     if (this.processorNode) {
       this.processorNode.disconnect();
       this.processorNode = null;
+    }
+
+    if (this.muteGainNode) {
+      this.muteGainNode.disconnect();
+      this.muteGainNode = null;
     }
 
     if (this.sourceNode) {
