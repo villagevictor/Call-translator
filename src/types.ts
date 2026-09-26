@@ -1,7 +1,7 @@
 export type SpeakerRole = 'LOCAL_USER' | 'REMOTE_PARTY' | 'SYSTEM';
 
-export type CallState = 'IDLE' | 'DIALING' | 'RINGING' | 'IN_CALL' | 'ENDED';
-export type CallMode = 'AI_PARTNER' | 'DUAL_SPEAKER';
+export type CallState = 'IDLE' | 'LISTENING_CALL' | 'PAUSED';
+export type CallMode = 'LIVE_CALL_COMPANION' | 'DUAL_SPEAKER';
 
 export interface SupportedLanguage {
   code: string;
